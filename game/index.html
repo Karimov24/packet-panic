@@ -4,13 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>Packet Panic</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-  html,body{margin:0;height:100%;background:#0b0b1a;display:flex;align-items:center;justify-content:center}
-  canvas{height:100vh;max-width:100vw;aspect-ratio:240/320;image-rendering:pixelated;background:#000}
+  html,body{margin:0;height:100%;background:#05050f;display:flex;align-items:center;justify-content:center;overflow:hidden;user-select:none;-webkit-user-select:none}
+  #wrap{position:relative;width:min(100vw,calc(100vh*0.75));aspect-ratio:3/4}
+  canvas{width:100%;height:100%;display:block;image-rendering:pixelated;background:#000;touch-action:none}
+  #wrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.28) 3px);
+    box-shadow:inset 0 0 60px rgba(0,0,0,.7)}
+  #mute{position:fixed;right:6px;bottom:6px;font:8px 'Press Start 2P',monospace;color:#33ff66;
+    background:#000;border:1px solid #33ff66;padding:6px;z-index:5}
 </style>
 </head>
 <body>
-<canvas id="c" width="240" height="320"></canvas>
+<div id="wrap"><canvas id="c" width="240" height="320"></canvas></div>
+<button id="mute" onclick="toggleMute()">SOUND ON</button>
+<script src="sfx.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

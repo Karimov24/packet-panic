@@ -1,10 +1,13 @@
 import sqlite3, secrets, time, re
+from collections import deque, Counter
 from flask import Flask, request, jsonify
 
 app = Flask(__name__, static_folder='../game', static_url_path='')
 DB = 'scores.db'
-runs = {}          # token -> (start_time, ip)
-last_submit = {}   # ip -> time
+runs = {}
+last_submit = {}
+rejected = deque(maxlen=8)
+missed = Counter()
 
 def conn():
     c = sqlite3.connect(DB)
@@ -16,6 +19,57 @@ with conn() as c:
 
 def ip():
     return request.headers.get('CF-Connecting-IP') or request.remote_addr
+
+def reject(reason, d, code=400):
+    ini = re.sub(r'[^A-Za-z0-9]', '', str(d.get('initials', '???')))[:3].upper() or '???'
+    rejected.appendleft({'initials': ini, 'reason': reason, 'score': str(d.get('score'))[:8]})
+    print('REJECTED', reason, ini, d.get('score'))
+    return jsonify(error=reason), code
+
+KINDS = set('zfwgbm')
+
+def replay(log, elapsed):
+    if not isinstance(log, list) or not (1 <= len(log) <= 4000):
+        return None, 'bad log'
+    score, combo, lives = 0, 1, 3
+    prev_t, last_tap, plain, flood, ended = -1, -1000, 0, 0, False
+    for e in log:
+        if ended:
+            return None, 'events after game over'
+        if not (isinstance(e, list) and len(e) == 2 and isinstance(e[0], (int, float))
+                and isinstance(e[1], str) and e[1] in KINDS):
+            return None, 'bad log'
+        t, k = e
+        if t < prev_t:
+            return None, 'bad timing'
+        prev_t = t
+        if k in 'zfw':
+            if t - last_tap < 40:
+                return None, 'too fast'
+            last_tap = t
+        if k in 'fm':
+            flood += 1
+        else:
+            plain += 1
+        if k == 'z':
+            score += 10 * combo; combo = min(combo + 1, 8)
+        elif k == 'f':
+            score += 3
+        elif k == 'g':
+            score += 1
+        elif k == 'm':
+            score = max(0, score - 5)
+        else:
+            lives -= 1; combo = 1
+            if lives <= 0:
+                ended = True
+    if not ended:
+        return None, 'game not over'
+    if prev_t > elapsed * 1000 + 1500:
+        return None, 'log longer than run'
+    if plain > elapsed / 0.55 + 5 or flood > elapsed / 0.55 * 0.8 + 8:
+        return None, 'too many events'
+    return score, ''
 
 @app.route('/')
 def index():
@@ -31,22 +85,28 @@ def start():
 def score():
     d = request.get_json(silent=True) or {}
     token, initials, s = d.get('token'), d.get('initials', ''), d.get('score')
-    run = runs.pop(token, None)  # single use
+    run = runs.pop(token, None)
     if not run:
-        return jsonify(error='bad token'), 400
+        return reject('bad token', d)
     if not re.fullmatch(r'[A-Z0-9]{3}', str(initials)):
-        return jsonify(error='bad initials'), 400
+        return reject('bad initials', d)
     if not isinstance(s, int) or s < 0:
-        return jsonify(error='bad score'), 400
-    elapsed = time.time() - run[0]
-    if s > elapsed * 60 + 20:   # max plausible points per second
-        print('REJECTED', initials, s, round(elapsed, 1))
-        return jsonify(error='implausible score'), 400
+        return reject('bad score', d)
+    calc, why = replay(d.get('log'), time.time() - run[0])
+    if calc is None:
+        return reject(why, d)
+    if calc != s:
+        return reject('log mismatch', d)
     if time.time() - last_submit.get(ip(), 0) < 5:
-        return jsonify(error='slow down'), 429
+        return reject('rate limited', d, 429)
     last_submit[ip()] = time.time()
     with conn() as c:
-        c.execute('INSERT INTO scores (initials, score, ts) VALUES (?,?,?)', (initials, s, time.time()))
+        c.execute('INSERT INTO scores (initials, score, ts) VALUES (?,?,?)', (initials, calc, time.time()))
+    ms = d.get('misses')
+    if isinstance(ms, list):
+        for m in ms[:3]:
+            if isinstance(m, str):
+                missed[m[:40]] += 1
     return jsonify(ok=True)
 
 @app.get('/api/top')
@@ -54,6 +114,12 @@ def top():
     with conn() as c:
         rows = c.execute('SELECT initials, score FROM scores ORDER BY score DESC LIMIT 10').fetchall()
     return jsonify([dict(r) for r in rows])
+
+@app.get('/api/stats')
+def stats():
+    with conn() as c:
+        n = c.execute('SELECT COUNT(*) FROM scores').fetchone()[0]
+    return jsonify(plays=n, rejected=list(rejected), missed=missed.most_common(5))
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8000)

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Packet Panic - Leaderboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<style>
+  body{margin:0;background:#000;color:#33ff66;font-family:'Press Start 2P',monospace;padding:3vh 3vw;overflow:hidden}
+  h1{font-size:4vw;margin:0 0 2vh;color:#ffd400}
+  .cols{display:flex;gap:4vw}
+  .col{flex:1}
+  h2{font-size:1.6vw;color:#4de1ff;margin:0 0 2vh}
+  .row{font-size:2vw;margin:1.4vh 0}
+  .shame .row{font-size:1.2vw;color:#ff4d4d}
+  #qr{background:#fff;padding:12px;display:inline-block}
+  .small{font-size:1.2vw;margin-top:2vh}
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,0) 2px,rgba(0,0,0,.25) 3px)}
+</style>
+</head>
+<body>
+<h1>PACKET PANIC</h1>
+<div class="cols">
+  <div class="col"><h2>TOP 10</h2><div id="board"></div></div>
+  <div class="col">
+    <h2>SCAN TO PLAY</h2>
+    <div id="qr"></div>
+    <div class="small" id="url"></div>
+    <div class="small" id="plays"></div>
+    <h2 style="margin-top:3vh">MOST MISSED</h2>
+    <div id="missed"></div>
+  </div>
+  <div class="col shame"><h2>HALL OF SHAME</h2><div id="shame"></div>
+    <div class="small" style="color:#33ff66">BLOCKED CHEAT ATTEMPTS</div></div>
+</div>
+<script>
+const base = new URLSearchParams(location.search).get('url') || location.origin;
+document.getElementById('url').textContent = base.replace('https://', '');
+new QRCode(document.getElementById('qr'), { text: base, width: 220, height: 220 });
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function refresh() {
+  try {
+    const top = await (await fetch('/api/top')).json();
+    document.getElementById('board').innerHTML = top.map((r, i) =>
+      `<div class="row">${String(i + 1).padStart(2, ' ')}. ${esc(r.initials)} ${esc(r.score)}</div>`).join('');
+    const st = await (await fetch('/api/stats')).json();
+    document.getElementById('plays').textContent = st.plays + ' GAMES PLAYED';
+    document.getElementById('missed').innerHTML = st.missed.map(m =>
+      `<div class="row" style="font-size:1.1vw">${esc(m[0])} x${m[1]}</div>`).join('') || '<div class="row" style="font-size:1.1vw">NO DATA YET</div>';
+    document.getElementById('shame').innerHTML = st.rejected.map(r =>
+      `<div class="row">${esc(r.initials)} ${esc(r.score)}<br>&gt; ${esc(r.reason)}</div>`).join('') || '<div class="row">NO CHEATERS YET</div>';
+  } catch (e) {}
+}
+refresh(); setInterval(refresh, 3000);
+</script>
+</body>
+</html>
