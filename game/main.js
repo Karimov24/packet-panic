@@ -117,7 +117,9 @@ async function sendScore(name) {
       const j = await res.json();
       myId = j.id; myName = j.name; myRank = j.rank;
     } else {
-      postMsg = 'REJECTED';
+      let j2 = {};
+      try { j2 = await res.json(); } catch (e) {}
+      postMsg = j2.cheat ? ('CHEAT LOGGED: ' + String(j2.alias).toUpperCase()) : 'REJECTED';
     }
   } catch (e) { postMsg = 'OFFLINE'; }
   namePending = false;
@@ -957,7 +959,7 @@ function draw(dt) {
         ctx.fillStyle = AMBER;
         ctx.fillText(txt.slice(0, 24), 120, my);
         ctx.fillStyle = '#aaaaaa';
-        ctx.fillText(('> ' + why).slice(0, 27), 120, my + 10);
+        fitText('> ' + why, 232, 120, my + 10);
         my += 21;
       });
     }

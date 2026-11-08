@@ -1,6 +1,7 @@
-import sqlite3, secrets, time, re, os, json, textwrap
+import sqlite3, secrets, time, re, os, json, textwrap, random
 from collections import deque, Counter
 from flask import Flask, request, jsonify
+from markupsafe import escape
 from google import genai
 from google.genai import types
 
@@ -8,10 +9,10 @@ from google.genai import types
 app = Flask(__name__, static_folder='../game', static_url_path='')
 from werkzeug.middleware.proxy_fix import ProxyFix
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
-DB = 'scores.db'
+DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scores.db')
 runs = {}
 last_submit = {}
-rejected = deque(maxlen=8)
+rejected = deque(maxlen=20)
 missed = Counter()
 
 GEMINI_MODEL = 'gemini-3.1-flash-lite'
@@ -44,13 +45,17 @@ def ip():
     xf = request.headers.get('X-Forwarded-For', '')
     return (xf.split(',')[0].strip() or request.headers.get('CF-Connecting-IP') or request.remote_addr)
 
+CHEAT_REASONS = {'log mismatch', 'bad log', 'bad timing', 'too fast', 'too many events',
+                 'events after game over', 'game not over', 'log longer than run', 'bad score'}
 
 def reject(reason, d, code=400):
     raw = d.get('name')
-    nm = re.sub(r'[^A-Za-z0-9 _\-]', '', str(raw if raw is not None else 'Anonymous'))[:12] or '???'
-    rejected.appendleft({'name': nm, 'reason': reason, 'score': str(d.get('score'))[:8]})
-    print('REJECTED:', reason, nm, d.get('score'))
-    return jsonify(error=reason), code
+    nm = re.sub(r'[^A-Za-z0-9 _\-]', '', str(raw if raw is not None else '')).strip()[:12]
+    alias = nm or 'Anonymous %d' % random.randint(100, 999)
+    cheat = reason in CHEAT_REASONS
+    rejected.appendleft({'name': alias, 'reason': reason, 'score': str(d.get('score'))[:8], 'cheat': cheat})
+    print('REJECTED:', reason, alias, d.get('score'))
+    return jsonify(error=reason, alias=alias, cheat=cheat), code
 
 
 def clean(s, n):
@@ -279,6 +284,40 @@ def debrief():
     lines = textwrap.wrap(tip, 28, max_lines=2, placeholder='...')
     return jsonify(rank=rank_for(s), tip=lines, source=source)
 
+@app.get('/shame')
+def shame():
+    rows = ''.join(
+        '<tr><td>%s</td><td>%s</td><td>%s</td></tr>' % (
+            escape(r['name']), escape(r['score']), escape(r['reason'].upper()))
+        for r in rejected if r.get('cheat')
+    ) or '<tr><td colspan="3">NO CHEATERS YET</td></tr>'
+    return ('<!doctype html><html><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="3"><title>Hall of Shame</title>'
+            '<style>body{background:#000;color:#ff4d4d;font-family:monospace;text-align:center;padding:24px}'
+            'h1{font-size:44px;letter-spacing:4px}table{margin:auto;font-size:28px;border-collapse:collapse}'
+            'td,th{padding:10px 28px;border-bottom:1px solid #400}th{color:#ffd400}</style></head><body>'
+            '<h1>HALL OF SHAME</h1><table><tr><th>ALIAS</th><th>FAKE SCORE</th><th>CAUGHT BY</th></tr>'
+            + rows + '</table></body></html>')
+
+@app.get('/live')
+def live():
+    with conn() as c:
+        top_rows = c.execute('SELECT initials AS name, score FROM scores ORDER BY score DESC, id ASC LIMIT 10').fetchall()
+    good = ''.join('<tr><td>%d.</td><td>%s</td><td>%d</td></tr>' % (i + 1, escape(r['name']), r['score'])
+                   for i, r in enumerate(top_rows)) or '<tr><td colspan="3">NO SCORES YET</td></tr>'
+    bad = ''.join('<tr><td>%s</td><td>%s</td><td>%s</td></tr>' % (
+                      escape(r['name']), escape(r['score']), escape(r['reason'].upper()))
+                  for r in rejected if r.get('cheat')) or '<tr><td colspan="3">NO CHEATERS YET</td></tr>'
+    return ('<!doctype html><html><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="3"><title>Default Deny - Live</title>'
+            '<style>body{background:#000;font-family:monospace;margin:0;padding:24px}'
+            '.wrap{display:flex;gap:32px;justify-content:center}'
+            '.col{flex:1;text-align:center}h1{font-size:34px;letter-spacing:3px}'
+            'table{margin:auto;font-size:24px;border-collapse:collapse}'
+            'td{padding:8px 18px;border-bottom:1px solid #222}'
+            '.g h1{color:#4de1ff}.g td{color:#ffd400}.r h1{color:#ff4d4d}.r td{color:#ff4d4d}</style></head><body>'
+            '<div class="wrap"><div class="col g"><h1>LEADERBOARD</h1><table>' + good + '</table></div>'
+            '<div class="col r"><h1>HALL OF SHAME</h1><table>' + bad + '</table></div></div></body></html>')
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=8000)
