@@ -256,8 +256,57 @@ let state = 'title', packets = [], parts = [], score = 0, lives = 3, combo = 1, 
 let spawnT = 0, speed = 14, last = performance.now();
 let stars = Array.from({ length: 30 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: 5 + Math.random() * 15 }));
 
+/* ---------- Red Team Debrief ---------- */
+let debrief = null, debriefLoading = false, debriefSeq = 0;
+
+function rankFor(s) {
+  return s >= 1800 ? 'CISO' : s >= 1000 ? 'SECURITY ENGINEER' : s >= 600 ? 'SOC ANALYST L2'
+    : s >= 300 ? 'SOC ANALYST L1' : s >= 100 ? 'SCRIPT KIDDIE' : 'COMPROMISED HOST';
+}
+
+function wrap2(t) {
+  const lines = [''];
+  for (const w of String(t).split(' ')) {
+    const cur = lines[lines.length - 1];
+    const next = (cur + ' ' + w).trim();
+    if (next.length <= 28) lines[lines.length - 1] = next;
+    else if (lines.length < 2) lines.push(w);
+  }
+  return lines;
+}
+
+function localDebrief() {
+  const m = missLog[missLog.length - 1];
+  let tip = 'Clean defense. Watch lookalike domains.';
+  if (m) tip = m.type === 'FALSE BLOCK' ? 'You blocked safe traffic. Read before you tap.' : 'Missed: ' + m.why;
+  return { rank: rankFor(score), tip: wrap2(tip), source: 'local' };
+}
+
+async function loadDebrief() {
+  const mine = ++debriefSeq;
+  debrief = null; debriefLoading = true;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4500);
+  try {
+    const res = await fetch('/api/debrief', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctl.signal,
+      body: JSON.stringify({ score, level, misses: missLog.slice(-3) })
+    });
+    if (!res.ok) throw new Error('bad');
+    const j = await res.json();
+    if (mine === debriefSeq) debrief = { rank: j.rank, tip: j.tip, source: j.source };
+  } catch (e) {
+    if (mine === debriefSeq) debrief = localDebrief();
+  }
+  clearTimeout(timer);
+  if (mine === debriefSeq) debriefLoading = false;
+}
+
 function reset() {
   stopDeathMusic();
+    debriefSeq++; debrief = null; debriefLoading = false;
   packets = []; parts = []; lasers = []; score = 0; lives = 3; combo = 1; level = 1; banner = 2;
   streak = 0; gotStreak5 = false; gotStreak10 = false; gotStreak20 = false;
   streakBanner = ''; streakBannerT = 0;
@@ -312,6 +361,7 @@ function defuseToken(tok) {
   burst(tok.x + tok.w / 2, by + 8, CYAN, 12);
   if (typeof sfx !== 'undefined' && sfx.zap) sfx.zap();
   score += 25;
+  logEv('k');
   if (boss.hp <= 0) {
     burst(W / 2, by + 8, AMBER, 35);
     bossDefeatedLevels[level] = true;
@@ -366,6 +416,7 @@ function usePurge() {
     burst(p.x + p.w / 2, p.y + 10, AMBER, 14);
     score += p.flood ? 3 : 5;
     streak++;
+    logEv(p.flood ? 'v' : 'u');
   }
   packets = packets.filter(p => !p.bad);
   checkStreakRewards();
@@ -453,6 +504,7 @@ function loseLife(kind) {
     deathSound();
     startDeathMusic();
     showNameBox();
+    loadDebrief();
   }
 }
 
@@ -483,6 +535,7 @@ function update(dt) {
       missLog.push({ type: 'ZERO-DAY BREACH', text: boss.title.replace('ZERO-DAY: ', ''), why: 'Unpatched zero-day breached firewall' });
       boss = null;
       bossDefeatedLevels[level] = true;
+      logEv(quarantine > 0 ? 'q' : 'b');
       loseLife('breach');
     }
     return;
@@ -499,7 +552,7 @@ function update(dt) {
         lasers.push({ x: tgt.x + tgt.w / 2, y: tgt.y + 10, life: 0.2 });
         burst(tgt.x + tgt.w / 2, tgt.y + 10, '#c58bff', 12);
         score += 10; streak++;
-        logEv('z');
+        logEv('c');
         checkStreakRewards();
         blip(1200, 0.15, 'square', 0.1);
         copCd = 3;
@@ -534,7 +587,7 @@ function update(dt) {
       if (p.bad && p.flood) {
         logEv('m'); score = Math.max(0, score - 5); streak = 0;
       } else if (p.bad) {
-        logEv('b');
+                logEv(quarantine > 0 ? 'q' : 'b');
         missLog.push({ type: 'BREACH', text: p.t, why: p.why });
         loseLife('breach');
       } else {
@@ -605,7 +658,7 @@ function tap(x, y) {
         if (typeof sfx !== 'undefined' && sfx.zap) sfx.zap();
       } else {
         logEv('w');
-        missLog.push({ type: 'FALSE BLOCK', text: p.t, why: 'Safe traffic falsely blocked' });
+        missLog.push({ type: 'FALSE BLOCK', text: p.t, why: 'Safe traffic blocked' });
         burst(p.x + p.w / 2, p.y + 10, RED);
         loseLife('wrong');
       }
@@ -892,12 +945,12 @@ function draw(dt) {
       ctx.fillStyle = RED; ctx.fillText(postMsg, 120, 128);
     }
 
-    ctx.fillStyle = RED; ctx.fillText('-- REVIEW OF BREACHES --', 120, 156);
-    const recentMisses = missLog.slice(-3);
+        ctx.fillStyle = RED; ctx.fillText('-- REVIEW OF BREACHES --', 120, 156);
+    const recentMisses = missLog.slice(-2);
     if (recentMisses.length === 0) {
       ctx.fillStyle = '#666666'; ctx.fillText('NO DIRECT BREACHES', 120, 172);
     } else {
-      let my = 171;
+      let my = 169;
       recentMisses.forEach(m => {
         const txt = typeof m === 'object' ? m.text : String(m);
         const why = typeof m === 'object' ? m.why : 'Breached firewall';
@@ -909,11 +962,23 @@ function draw(dt) {
       });
     }
 
-    ctx.fillStyle = CYAN; ctx.fillText('-- LEADERBOARD --', 120, 240);
-    board.slice(0, 3).forEach((r, idx) => {
+    ctx.fillStyle = '#c58bff';
+    ctx.fillText(debrief && debrief.source === 'gemini' ? '-- RED TEAM AI DEBRIEF --' : '-- RED TEAM DEBRIEF --', 120, 214);
+    if (debriefLoading || !debrief) {
+      if (blink) { ctx.fillStyle = WHITE; ctx.fillText('ANALYZING BREACH...', 120, 230); }
+    } else {
+      ctx.fillStyle = AMBER;
+      ctx.fillText(('RANK: ' + debrief.rank).slice(0, 28), 120, 226);
+      ctx.fillStyle = '#cccccc';
+      (debrief.tip || []).slice(0, 2).forEach((ln, i) =>
+        ctx.fillText(String(ln).toUpperCase().slice(0, 28), 120, 238 + i * 11));
+    }
+
+    ctx.fillStyle = CYAN; ctx.fillText('-- LEADERBOARD --', 120, 266);
+    board.slice(0, 2).forEach((r, idx) => {
       const isMe = myId !== null && r.id === myId;
       ctx.fillStyle = isMe ? WHITE : AMBER;
-      ctx.fillText((isMe ? '>' : '') + (idx + 1) + '. ' + r.name.slice(0, 10) + ' ' + r.score, 120, 253 + idx * 11);
+      ctx.fillText((isMe ? '>' : '') + (idx + 1) + '. ' + r.name.slice(0, 10) + ' ' + r.score, 120, 277 + idx * 10);
     });
 
     ctx.strokeStyle = CYAN;
